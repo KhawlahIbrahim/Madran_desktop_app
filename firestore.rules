@@ -1,0 +1,29 @@
+rules_version = '2';
+
+// Draft security rule per SIN-PD-KH-09: a Leader can only read/write their own
+// missions. There are no other roles in the MADRAN MVP (no Control Room, no
+// rescue/support team, no safety officer — see SIN-PD-KH-05).
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /leaders/{leaderId} {
+      allow read, write: if request.auth != null && request.auth.uid == leaderId;
+
+      match /missions/{missionId} {
+        allow read, write: if request.auth != null && request.auth.uid == leaderId;
+
+        match /{subcollection}/{docId} {
+          allow read, write: if request.auth != null && request.auth.uid == leaderId;
+        }
+      }
+    }
+
+    match /devices/{deviceId} {
+      // Maintenance registry (SIN-PD-KH-06) — any signed-in Leader can read
+      // for device pairing; tighten this once a maintenance-technician auth
+      // role is scoped, if that ever happens.
+      allow read: if request.auth != null;
+      allow write: if false; // written by a future admin/maintenance tool, not this app
+    }
+  }
+}
