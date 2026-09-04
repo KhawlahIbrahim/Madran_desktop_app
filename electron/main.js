@@ -25,6 +25,7 @@ function createWindow() {
     minWidth: 1100,
     minHeight: 700,
     backgroundColor: '#0B1E33',
+    icon: path.join(__dirname, isDev ? '../build/icon.png' : '../dist/icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -59,7 +60,7 @@ app.whenReady().then(() => {
     const leader = local.getLeader();
     if (!leader) return;
     try {
-      const result = await sync.syncMission(local, activeMissionId, leader.id);
+      const result = await sync.syncMission(local, activeMissionId);
       if (result.synced) mainWindow?.webContents.send('sync:completed', result);
     } catch (err) {
       console.warn('[MADRAN] Sync attempt failed, will retry:', err.message);
@@ -80,13 +81,63 @@ app.on('window-all-closed', () => {
 ipcMain.handle('leader:get', () => local.getLeader());
 ipcMain.handle('leader:save', (_e, data) => local.upsertLeader(data));
 ipcMain.handle('leader:clear', () => local.clearLeader());
+const OFFLINE_AUTH_CODES = new Set([
+  'auth/network-request-failed',
+  'auth/timeout',
+  'auth/internal-error',
+]);
+
+const AUTH_MESSAGES = {
+  'auth/email-already-in-use': 'An account with this email already exists — sign in instead.',
+  'auth/invalid-email': 'That doesn’t look like a valid email address.',
+  'auth/weak-password': 'Password is too weak — use at least 6 characters.',
+  'auth/missing-password': 'Please enter a password.',
+  'auth/invalid-credential': 'Email or password is incorrect.',
+  'auth/wrong-password': 'Email or password is incorrect.',
+  'auth/user-not-found': 'No account found for this email — register first.',
+  'auth/too-many-requests': 'Too many attempts. Wait a moment and try again.',
+  'auth/missing-email': 'Please enter your email address first.',
+};
+function authError(err) {
+  return new Error(AUTH_MESSAGES[err.code] || err.message || 'Authentication failed.');
+}
+
 ipcMain.handle('cloud:signIn', async (_e, { email, password }) => {
-  const user = await sync.signIn(email, password);
-  return local.upsertLeader({ name: user.displayName || email, email, tabletDeviceId: null });
+  try {
+    const user = await sync.signIn(email, password);
+    return local.upsertLeader({ name: user.displayName || email, email, tabletDeviceId: null });
+  } catch (err) {
+    // If we're just offline and this Chief has signed in on this laptop before,
+    // let them straight through — missions run fully local anyway.
+    const existing = local.getLeader();
+    if (OFFLINE_AUTH_CODES.has(err.code) && existing && existing.email === email) {
+      return { ...existing, offlineFallback: true };
+    }
+    throw authError(err);
+  }
 });
 ipcMain.handle('cloud:signUp', async (_e, { email, password, name }) => {
-  const user = await sync.signUp(email, password, name);
-  return local.upsertLeader({ name: user.displayName || name || email, email, tabletDeviceId: null });
+  try {
+    const user = await sync.signUp(email, password, name);
+    return local.upsertLeader({ name: user.displayName || name || email, email, tabletDeviceId: null });
+  } catch (err) {
+    // Online registration is preferred, but if the network is down we still
+    // create the Chief locally so the app is usable now; the account can be
+    // registered online later.
+    if (OFFLINE_AUTH_CODES.has(err.code)) {
+      const leader = local.upsertLeader({ name: name || email, email, tabletDeviceId: null });
+      return { ...leader, offlineFallback: true };
+    }
+    throw authError(err);
+  }
+});
+ipcMain.handle('cloud:resetPassword', async (_e, { email }) => {
+  try {
+    await sync.resetPassword(email);
+    return { sent: true };
+  } catch (err) {
+    throw authError(err);
+  }
 });
 ipcMain.handle('cloud:isConfigured', () => sync.isConfigured());
 
@@ -106,8 +157,20 @@ ipcMain.handle('mission:start', (_e, missionId) => {
 
   mesh.start(
     missionId,
-    mission.members.map((m) => ({ id: m.id, onConnected: (id) => local.setMemberMeshStatus(id, true) })),
+    mission.members.map((m) => ({
+      id: m.id,
+      deviceTypes: m.devices.map((d) => d.type),
+      onConnected: (id) => local.setMemberMeshStatus(id, true),
+    })),
     {
+      onDeviceStatus: (memberId, type, status) => {
+        const device = local.setDeviceStatus(missionId, memberId, type, status);
+        if (device) mainWindow?.webContents.send('mesh:deviceStatus', device);
+      },
+      onLocationNode: (status) => {
+        local.setLocationNodeStatus(missionId, status);
+        mainWindow?.webContents.send('mesh:locationNode', { code: 'LOCATION-01', status, lastSeen: Date.now() });
+      },
       onVitals: (memberId, reading) => {
         const v = local.recordVitals(missionId, memberId, reading);
         mainWindow?.webContents.send('mesh:vitals', v);
@@ -144,5 +207,5 @@ ipcMain.handle('request:acknowledge', (_e, requestId) => local.acknowledgeDevice
 ipcMain.handle('mission:syncNow', async (_e, missionId) => {
   const leader = local.getLeader();
   if (!leader) return { synced: false, reason: 'no-leader' };
-  return sync.syncMission(local, missionId, leader.id);
+  return sync.syncMission(local, missionId);
 });

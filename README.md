@@ -21,10 +21,19 @@ does not render (see `SIN-PD-KH-01` and `MADRAN_MVP_Requirements_v2.md`).
   actual internet connection, and batches pending records up using the
   provisional collection structure from `SIN-PD-KH-09`. It never blocks the UI
   and mission data is never lost if it's offline.
-- **Screens**: Login (Chief-only), Missions list, 3-step Create Mission,
-  Live Monitoring (team vitals, simplified 2D map, SOS pop-up), Alerts feed
-  (Alert vs DeviceRequest visually distinct, matching `SIN-PD-KH-02`), Team
-  Roster, End Mission summary.
+- **Screens**: Login (Chief-only, online registration with an automatic
+  local fallback when offline), Missions list, 3-step Create Mission,
+  Live Monitoring (team vitals, per-firefighter wearable status, Location Node
+  status, simplified 2D map, SOS pop-up), Alerts feed (Alert vs DeviceRequest
+  visually distinct, matching `SIN-PD-KH-02`), Team Roster, End Mission summary.
+- **Per-firefighter wearables** — each team member carries a chest harness, a
+  belt SOS / pass-out device, and a smart helmet (device codes `HARNESS-01`,
+  `SOS-01`, `HELMET-01`, …), plus one mission-level Location Node gateway
+  (`LOCATION-01`). Each wearable reports Connected / Disconnected / Alert with a
+  last-seen heartbeat; turning one off shows as Disconnected within a few
+  seconds. The mesh simulator drives these states until real hardware exists.
+- **Mission team-size limit** — the maximum team size chosen when creating a
+  mission is a hard cap, enforced in the wizard and in the local database.
 
 ## What is NOT implemented (needs real hardware/decisions first)
 

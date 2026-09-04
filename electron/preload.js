@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('madran', {
   cloud: {
     signIn: (email, password) => ipcRenderer.invoke('cloud:signIn', { email, password }),
     signUp: (email, password, name) => ipcRenderer.invoke('cloud:signUp', { email, password, name }),
+    resetPassword: (email) => ipcRenderer.invoke('cloud:resetPassword', { email }),
     isConfigured: () => ipcRenderer.invoke('cloud:isConfigured'),
   },
   roster: {
@@ -34,7 +35,10 @@ contextBridge.exposeInMainWorld('madran', {
     acknowledge: (id) => ipcRenderer.invoke('request:acknowledge', id),
   },
   on: (channel, callback) => {
-    const allowed = ['mesh:vitals', 'mesh:deviceRequest', 'mesh:alert', 'sync:completed'];
+    const allowed = [
+      'mesh:vitals', 'mesh:deviceRequest', 'mesh:alert',
+      'mesh:deviceStatus', 'mesh:locationNode', 'sync:completed',
+    ];
     if (!allowed.includes(channel)) return () => {};
     const listener = (_event, data) => callback(data);
     ipcRenderer.on(channel, listener);

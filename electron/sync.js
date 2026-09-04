@@ -9,7 +9,10 @@
 
 const { initializeApp } = require('firebase/app');
 const { getFirestore, doc, writeBatch, serverTimestamp } = require('firebase/firestore');
-const { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } = require('firebase/auth');
+const {
+  getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword,
+  updateProfile, sendPasswordResetEmail,
+} = require('firebase/auth');
 
 let app, dbCloud, auth;
 
@@ -37,13 +40,21 @@ async function signUp(email, password, displayName) {
   return cred.user;
 }
 
+async function resetPassword(email) {
+  if (!auth) throw new Error('Firebase not configured yet');
+  await sendPasswordResetEmail(auth, email);
+}
+
 function isConfigured() {
   return !!dbCloud;
 }
 
 // Batches all pending D1/D3/D4 records for one mission into a single write.
-async function syncMission(local, missionId, leaderId) {
+// The Firestore path is scoped by the Leader's Firebase Auth uid — that's what
+// firestore.rules checks (request.auth.uid == leaderId), not the local DB id.
+async function syncMission(local, missionId) {
   if (!dbCloud || !auth?.currentUser) return { synced: false, reason: 'offline-or-unconfigured' };
+  const leaderId = auth.currentUser.uid;
 
   const mission = local.getMission(missionId);
   const pendingVitals = local.pendingVitals(missionId);
@@ -98,4 +109,4 @@ async function syncMission(local, missionId, leaderId) {
   return { synced: true, counts: { vitals: pendingVitals.length, alerts: pendingAlerts.length, requests: pendingRequests.length } };
 }
 
-module.exports = { configure, signIn, signUp, isConfigured, syncMission };
+module.exports = { configure, signIn, signUp, resetPassword, isConfigured, syncMission };

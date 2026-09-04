@@ -54,9 +54,11 @@ export default function App() {
         {page === 'home' && (
           <Home
             onNavigate={setPage}
-            onOpenMission={(m) => {
-              if (m.status === 'active') { setActiveMission(m); setPage('live'); }
-              else if (m.status === 'ended') { setEndedMission(m); setPage('ended'); }
+            onOpenMission={async (m) => {
+              // Rows from the missions list don't carry members/devices — hydrate first.
+              const full = (await window.madran.mission.get(m.id)) || m;
+              if (full.status === 'active') { setActiveMission(full); setPage('live'); }
+              else if (full.status === 'ended') { setEndedMission(full); setPage('ended'); }
             }}
           />
         )}

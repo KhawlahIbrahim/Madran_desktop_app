@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import MapView from '../components/MapView';
 import StatusBadge from '../components/StatusBadge';
 import SosModal from '../components/SosModal';
+import DeviceChips, { connectedSummary } from '../components/DeviceChips';
 
 function elapsed(startTime) {
   const s = Math.floor((Date.now() - startTime) / 1000);
@@ -12,8 +13,9 @@ function elapsed(startTime) {
 }
 
 export default function LiveMonitoring({ mission, onMissionEnded, onNavigate }) {
-  const [members, setMembers] = useState(mission.members);
+  const [members, setMembers] = useState(mission.members ?? []);
   const [vitalsByMember, setVitalsByMember] = useState({});
+  const [locationNode, setLocationNode] = useState(mission.locationNode || { code: 'LOCATION-01', status: 'disconnected' });
   const [now, setNow] = useState(Date.now());
   const [activeSos, setActiveSos] = useState(null);
   const [lastRequestByMember, setLastRequestByMember] = useState({});
@@ -24,7 +26,11 @@ export default function LiveMonitoring({ mission, onMissionEnded, onNavigate }) 
   }, []);
 
   useEffect(() => {
-    window.madran.mission.get(mission.id).then((m) => m && setMembers(m.members));
+    window.madran.mission.get(mission.id).then((m) => {
+      if (!m) return;
+      setMembers(m.members ?? []);
+      if (m.locationNode) setLocationNode(m.locationNode);
+    });
     window.madran.mission.latestVitals(mission.id).then((rows) => {
       const map = {};
       rows.forEach((v) => { map[v.memberId] = v; });
@@ -35,16 +41,28 @@ export default function LiveMonitoring({ mission, onMissionEnded, onNavigate }) 
   useEffect(() => {
     const offVitals = window.madran.on('mesh:vitals', (v) => {
       setVitalsByMember((prev) => ({ ...prev, [v.memberId]: v }));
-      window.madran.mission.get(mission.id).then((m) => m && setMembers(m.members));
+      window.madran.mission.get(mission.id).then((m) => m && setMembers(m.members ?? []));
     });
     const offRequest = window.madran.on('mesh:deviceRequest', (r) => {
       setLastRequestByMember((prev) => ({ ...prev, [r.memberId]: r }));
       if (r.type === 'sos_request') setActiveSos(r);
     });
     const offAlert = window.madran.on('mesh:alert', () => {
-      window.madran.mission.get(mission.id).then((m) => m && setMembers(m.members));
+      window.madran.mission.get(mission.id).then((m) => m && setMembers(m.members ?? []));
     });
-    return () => { offVitals(); offRequest(); offAlert(); };
+    const offDeviceStatus = window.madran.on('mesh:deviceStatus', (d) => {
+      setMembers((prev) => prev.map((m) => (
+        m.id === d.memberId
+          ? {
+            ...m,
+            meshConnected: 1,
+            devices: (m.devices || []).map((dev) => (dev.type === d.type ? { ...dev, ...d } : dev)),
+          }
+          : m
+      )));
+    });
+    const offLocationNode = window.madran.on('mesh:locationNode', (n) => setLocationNode(n));
+    return () => { offVitals(); offRequest(); offAlert(); offDeviceStatus(); offLocationNode(); };
   }, [mission.id]);
 
   const memberById = useMemo(() => Object.fromEntries(members.map((m) => [m.id, m])), [members]);
@@ -66,7 +84,13 @@ export default function LiveMonitoring({ mission, onMissionEnded, onNavigate }) 
       <div className="page-header">
         <div>
           <h1>{mission.locationName}</h1>
-          <p className="page-subtitle">Live Monitoring · Elapsed {elapsed(mission.startTime || now)}</p>
+          <p className="page-subtitle">
+            Live Monitoring · Elapsed {elapsed(mission.startTime || now)}
+            {' · '}
+            <span className={`node-status node-status-${locationNode.status}`}>
+              Location Node {locationNode.status === 'connected' ? 'online' : 'offline'}
+            </span>
+          </p>
         </div>
         <div className="header-actions">
           <button className="btn btn-secondary" onClick={() => onNavigate('alerts')}>View Alerts</button>
@@ -85,7 +109,8 @@ export default function LiveMonitoring({ mission, onMissionEnded, onNavigate }) 
                 <div key={m.id} className="team-member-row">
                   <div className="team-member-name">
                     {m.name}
-                    <span className="hint">{m.meshConnected ? 'On mesh' : 'Joining mesh…'}</span>
+                    <span className="hint">{connectedSummary(m.devices)}</span>
+                    <DeviceChips devices={m.devices} />
                   </div>
                   <div className="team-member-vitals">
                     <span title="Heart rate">♥ {v?.heartRate ?? '—'} bpm</span>

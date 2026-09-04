@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import DeviceChips from '../components/DeviceChips';
 
 const STEPS = ['Mission Details', 'Add Team', 'Confirm & Start'];
 
@@ -15,35 +16,45 @@ export default function CreateMission({ onMissionStarted, onCancel }) {
 
   const [mission, setMission] = useState(null);
   const [starting, setStarting] = useState(false);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     window.madran.roster.list().then(setRoster);
   }, []);
 
+  const atLimit = selected.length >= teamSize;
+
   function toggleSelected(member) {
-    setSelected((prev) =>
-      prev.find((m) => m.id === member.id) ? prev.filter((m) => m.id !== member.id) : [...prev, member]
-    );
+    setSelected((prev) => {
+      if (prev.find((m) => m.id === member.id)) return prev.filter((m) => m.id !== member.id);
+      if (prev.length >= teamSize) return prev; // team-size cap
+      return [...prev, member];
+    });
   }
 
   async function addToRoster() {
     if (!newName.trim()) return;
     const member = await window.madran.roster.add({ name: newName.trim(), badgeNumber: newBadge.trim() || null, deviceId: null });
     setRoster((r) => [...r, member]);
-    setSelected((s) => [...s, member]);
+    setSelected((s) => (s.length >= teamSize ? s : [...s, member]));
     setNewName('');
     setNewBadge('');
   }
 
   async function handleConfirmSetup() {
-    const created = await window.madran.mission.create({
-      locationName,
-      teamSize,
-      expectedDurationMin,
-      members: selected.map((m) => ({ rosterMemberId: m.id, name: m.name, badgeNumber: m.badgeNumber, deviceId: m.deviceId })),
-    });
-    setMission(created);
-    setStep(2);
+    setError(null);
+    try {
+      const created = await window.madran.mission.create({
+        locationName,
+        teamSize,
+        expectedDurationMin,
+        members: selected.map((m) => ({ rosterMemberId: m.id, name: m.name, badgeNumber: m.badgeNumber, deviceId: m.deviceId })),
+      });
+      setMission(created);
+      setStep(2);
+    } catch (err) {
+      setError(err.message || 'Could not create the mission.');
+    }
   }
 
   async function handleStart() {
@@ -77,10 +88,18 @@ export default function CreateMission({ onMissionStarted, onCancel }) {
             <input value={locationName} onChange={(e) => setLocationName(e.target.value)} placeholder="e.g. Al Rawda Tower, Floor 4–7" />
           </label>
           <label>
-            Team size
-            <select value={teamSize} onChange={(e) => setTeamSize(Number(e.target.value))}>
+            Maximum team size
+            <select
+              value={teamSize}
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                setTeamSize(next);
+                setSelected((s) => s.slice(0, next));
+              }}
+            >
               {Array.from({ length: 9 }, (_, i) => i + 2).map((n) => <option key={n} value={n}>{n}</option>)}
             </select>
+            <span className="hint">You won't be able to add more than this many firefighters to the mission.</span>
           </label>
           <label>
             Expected duration (minutes)
@@ -93,27 +112,45 @@ export default function CreateMission({ onMissionStarted, onCancel }) {
       {step === 1 && (
         <div className="card form-card">
           <h3>Saved team</h3>
-          <p className="hint">Pick from your saved roster, or add a firefighter now.</p>
+          <p className="hint">
+            Pick from your saved roster, or add a firefighter now.
+            {' '}
+            <strong className={atLimit ? 'limit-reached' : undefined}>{selected.length} / {teamSize} selected</strong>
+          </p>
           <div className="roster-list">
-            {roster.map((m) => (
-              <label key={m.id} className="roster-row">
-                <input type="checkbox" checked={!!selected.find((s) => s.id === m.id)} onChange={() => toggleSelected(m)} />
-                <span>{m.name}</span>
-                {m.badgeNumber && <span className="hint">#{m.badgeNumber}</span>}
-              </label>
-            ))}
+            {roster.map((m) => {
+              const isSelected = !!selected.find((s) => s.id === m.id);
+              return (
+                <label key={m.id} className={`roster-row ${!isSelected && atLimit ? 'roster-row-disabled' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    disabled={!isSelected && atLimit}
+                    onChange={() => toggleSelected(m)}
+                  />
+                  <span>{m.name}</span>
+                  {m.badgeNumber && <span className="hint">#{m.badgeNumber}</span>}
+                </label>
+              );
+            })}
             {roster.length === 0 && <p className="hint">No saved team members yet — add one below.</p>}
           </div>
 
           <div className="add-member-row">
             <input placeholder="Firefighter name" value={newName} onChange={(e) => setNewName(e.target.value)} />
             <input placeholder="Badge # (optional)" value={newBadge} onChange={(e) => setNewBadge(e.target.value)} />
-            <button className="btn btn-secondary" onClick={addToRoster}>+ Add</button>
+            <button className="btn btn-secondary" disabled={atLimit} onClick={addToRoster}>+ Add</button>
           </div>
+          {atLimit && <p className="hint limit-reached">Team is full ({teamSize}). Remove someone or raise the maximum in step 1.</p>}
+          {error && <div className="login-error">{error}</div>}
 
           <div className="wizard-actions">
             <button className="btn btn-secondary" onClick={() => setStep(0)}>Back</button>
-            <button className="btn btn-primary" disabled={selected.length === 0} onClick={handleConfirmSetup}>
+            <button
+              className="btn btn-primary"
+              disabled={selected.length === 0 || selected.length > teamSize}
+              onClick={handleConfirmSetup}
+            >
               Next: Confirm ({selected.length} selected)
             </button>
           </div>
@@ -128,9 +165,9 @@ export default function CreateMission({ onMissionStarted, onCancel }) {
           <h4>Device readiness</h4>
           <div className="roster-list">
             {mission.members.map((m) => (
-              <div key={m.id} className="roster-row">
+              <div key={m.id} className="roster-row roster-row-devices">
                 <span>{m.name}</span>
-                <span className="status-badge status-warning">Awaiting mesh join</span>
+                <DeviceChips devices={m.devices} />
               </div>
             ))}
           </div>

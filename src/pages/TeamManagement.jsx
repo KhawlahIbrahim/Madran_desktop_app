@@ -42,7 +42,7 @@ export default function TeamManagement() {
             <div className="roster-card-avatar">{m.name[0]}</div>
             <div className="roster-card-name">{m.name}</div>
             {m.badgeNumber && <div className="hint">Badge #{m.badgeNumber}</div>}
-            <div className="hint">No device paired yet</div>
+            <div className="hint">Wearables (harness, SOS, helmet) are assigned when a mission starts</div>
             <button className="btn btn-secondary btn-sm" onClick={() => remove(m.id)}>Remove</button>
           </div>
         ))}

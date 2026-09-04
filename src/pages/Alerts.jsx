@@ -38,7 +38,7 @@ function useCombinedFeed(missionId) {
   return { items, refresh };
 }
 
-export default function Alerts({ mission, members }) {
+export default function Alerts({ mission, members = [] }) {
   const { items, refresh } = useCombinedFeed(mission.id);
   const memberById = Object.fromEntries(members.map((m) => [m.id, m]));
 

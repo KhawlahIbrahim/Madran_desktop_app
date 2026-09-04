@@ -173,10 +173,34 @@
   border: 1px solid var(--neutral-line);
   border-radius: var(--radius-sm);
 }
-.team-member-name { display: flex; flex-direction: column; font-weight: 700; }
+.team-member-name { display: flex; flex-direction: column; gap: 4px; font-weight: 700; }
 .team-member-name .hint { font-weight: 400; }
 .team-member-vitals { display: flex; gap: var(--space-3); font-size: 13px; color: var(--text-secondary); }
 .team-member-request { font-size: 13px; color: var(--sinmar-orange); font-weight: 600; }
+
+/* ---------- Device chips ---------- */
+.device-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.device-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
+  border: 1px solid var(--neutral-line);
+  background: #EEF0F4; color: var(--neutral-mid);
+}
+.device-chip-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.device-chip-connected { background: #E6F4EC; color: var(--safe); border-color: #C7E7D3; }
+.device-chip-disconnected { background: #EEF0F4; color: var(--neutral-mid); border-color: var(--neutral-line); }
+.device-chip-alert { background: #FBE7E7; color: var(--critical); border-color: #F1C9C9; }
+
+/* ---------- Location Node status ---------- */
+.node-status { font-weight: 700; }
+.node-status-connected { color: var(--safe); }
+.node-status-disconnected { color: var(--neutral-mid); }
+
+/* ---------- Team-size limit ---------- */
+.limit-reached { color: var(--critical); font-weight: 700; }
+.roster-row-disabled { opacity: 0.5; }
+.roster-row-devices { justify-content: space-between; }
 
 /* ---------- Map ---------- */
 .map-view { display: flex; flex-direction: column; gap: var(--space-3); }
@@ -254,3 +278,5 @@
   background: none; border: none; padding: 0; font: inherit; font-weight: 600;
   color: var(--sinmar-navy); cursor: pointer; text-decoration: underline;
 }
+.login-forgot { display: block; margin: calc(-1 * var(--space-2)) 0 var(--space-3); font-size: 12px; font-weight: 500; }
+.login-forgot:disabled { opacity: 0.5; cursor: default; }

@@ -13,8 +13,22 @@ const crypto = require('crypto');
 
 let db;
 
+// The physical wearables each firefighter carries (SINMAR MVP scope):
+// chest biometrics harness, belt SOS / pass-out device, smart helmet.
+// The Location Node is a single mission-level gateway, tracked on the mission row.
+const DEVICE_TYPES = ['harness', 'sos', 'helmet'];
+
 function id() {
   return crypto.randomUUID();
+}
+
+// Adds a column to an existing table only if it isn't there yet — lets the
+// schema evolve without wiping a Chief's local mission history.
+function ensureColumn(table, column, ddl) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
 }
 
 function init(userDataPath) {
@@ -47,7 +61,22 @@ function init(userDataPath) {
       status TEXT NOT NULL DEFAULT 'setup', -- setup | active | ended
       startTime INTEGER,
       endTime INTEGER,
-      syncedAt INTEGER
+      syncedAt INTEGER,
+      locationNodeStatus TEXT DEFAULT 'disconnected', -- connected | disconnected
+      locationNodeLastSeen INTEGER
+    );
+
+    -- D2: per-firefighter wearables (harness, SOS device, helmet).
+    -- Scoped to a mission; each row is one physical device on the mannequin.
+    CREATE TABLE IF NOT EXISTS member_device (
+      id TEXT PRIMARY KEY,
+      missionId TEXT NOT NULL,
+      memberId TEXT NOT NULL,
+      type TEXT NOT NULL,        -- harness | sos | helmet
+      deviceCode TEXT NOT NULL,  -- e.g. HARNESS-01
+      status TEXT NOT NULL DEFAULT 'disconnected', -- connected | disconnected | alert
+      lastSeen INTEGER,
+      FOREIGN KEY (missionId) REFERENCES mission(id)
     );
 
     -- D2: TeamMember, scoped to a mission
@@ -103,6 +132,10 @@ function init(userDataPath) {
     );
   `);
 
+  // Migrations for databases created before the Location Node columns existed.
+  ensureColumn('mission', 'locationNodeStatus', "locationNodeStatus TEXT DEFAULT 'disconnected'");
+  ensureColumn('mission', 'locationNodeLastSeen', 'locationNodeLastSeen INTEGER');
+
   return db;
 }
 
@@ -145,6 +178,12 @@ function listMissions() {
   return db.prepare('SELECT * FROM mission ORDER BY startTime DESC').all();
 }
 function createMission({ locationName, teamSize, expectedDurationMin, members }) {
+  // The team-size chosen in step 1 is a hard cap — the mission can never carry
+  // more firefighters than that. The UI also enforces this, this is the backstop.
+  if (members.length > teamSize) {
+    throw new Error(`This mission is limited to ${teamSize} team members, but ${members.length} were selected.`);
+  }
+
   const missionId = id();
   db.prepare(`INSERT INTO mission (id, locationName, teamSize, expectedDurationMin, status)
               VALUES (?,?,?,?, 'setup')`)
@@ -154,19 +193,62 @@ function createMission({ locationName, teamSize, expectedDurationMin, members })
     INSERT INTO team_member (id, missionId, rosterMemberId, name, badgeNumber, deviceId, meshConnected, status)
     VALUES (?,?,?,?,?,?,0,'offline')
   `);
-  for (const m of members) {
-    insertMember.run(id(), missionId, m.rosterMemberId || null, m.name, m.badgeNumber || null, m.deviceId || null);
-  }
+  const insertDevice = db.prepare(`
+    INSERT INTO member_device (id, missionId, memberId, type, deviceCode, status)
+    VALUES (?,?,?,?,?, 'disconnected')
+  `);
+  members.forEach((m, i) => {
+    const memberId = id();
+    insertMember.run(memberId, missionId, m.rosterMemberId || null, m.name, m.badgeNumber || null, m.deviceId || null);
+    for (const type of DEVICE_TYPES) {
+      const code = `${type.toUpperCase()}-${String(i + 1).padStart(2, '0')}`;
+      insertDevice.run(id(), missionId, memberId, type, code);
+    }
+  });
   return getMission(missionId);
 }
 function getMission(missionId) {
   const mission = db.prepare('SELECT * FROM mission WHERE id=?').get(missionId);
   if (!mission) return null;
   const members = db.prepare('SELECT * FROM team_member WHERE missionId=?').all(missionId);
-  return { ...mission, members };
+  const devices = db.prepare('SELECT * FROM member_device WHERE missionId=?').all(missionId);
+  const withDevices = members.map((m) => ({
+    ...m,
+    devices: devices.filter((d) => d.memberId === m.id).sort((a, b) => DEVICE_TYPES.indexOf(a.type) - DEVICE_TYPES.indexOf(b.type)),
+  }));
+  const locationNode = {
+    code: 'LOCATION-01',
+    status: mission.locationNodeStatus || 'disconnected',
+    lastSeen: mission.locationNodeLastSeen || null,
+  };
+  return { ...mission, members: withDevices, locationNode };
 }
 function setMemberMeshStatus(memberId, connected) {
   db.prepare('UPDATE team_member SET meshConnected=? WHERE id=?').run(connected ? 1 : 0, memberId);
+}
+
+// ---------- Member devices (D2 — physical wearables) ----------
+function listMemberDevices(missionId) {
+  return db.prepare('SELECT * FROM member_device WHERE missionId=?').all(missionId);
+}
+function setDeviceStatus(missionId, memberId, type, status, lastSeen = Date.now()) {
+  const row = db.prepare(
+    'UPDATE member_device SET status=?, lastSeen=? WHERE missionId=? AND memberId=? AND type=? RETURNING *'
+  ).get(status, lastSeen, missionId, memberId, type);
+
+  // A member is "on mesh" as long as at least one of their wearables is reachable.
+  const anyLive = db.prepare(
+    "SELECT COUNT(*) AS n FROM member_device WHERE memberId=? AND status IN ('connected','alert')"
+  ).get(memberId).n;
+  db.prepare('UPDATE team_member SET meshConnected=? WHERE id=?').run(anyLive > 0 ? 1 : 0, memberId);
+  if (anyLive === 0) {
+    db.prepare("UPDATE team_member SET status='offline' WHERE id=?").run(memberId);
+  }
+  return row;
+}
+function setLocationNodeStatus(missionId, status, lastSeen = Date.now()) {
+  db.prepare('UPDATE mission SET locationNodeStatus=?, locationNodeLastSeen=? WHERE id=?')
+    .run(status, lastSeen, missionId);
 }
 function startMission(missionId) {
   db.prepare(`UPDATE mission SET status='active', startTime=? WHERE id=?`).run(Date.now(), missionId);
@@ -260,6 +342,7 @@ module.exports = {
   upsertLeader, getLeader, clearLeader,
   listRoster, addRosterMember, removeRosterMember,
   listMissions, createMission, getMission, setMemberMeshStatus, startMission, endMission,
+  listMemberDevices, setDeviceStatus, setLocationNodeStatus,
   recordVitals, latestVitalsForMission,
   createAlert, acknowledgeAlert, listAlerts,
   createDeviceRequest, respondToLocationRequest, acknowledgeDeviceRequest, listDeviceRequests,
