@@ -258,6 +258,26 @@ function endMission(missionId) {
   db.prepare(`UPDATE mission SET status='ended', endTime=? WHERE id=?`).run(Date.now(), missionId);
   return getMission(missionId);
 }
+// Permanently removes a mission and every row scoped to it (team members,
+// devices, vitals, alerts, device requests). A mission that's still active
+// can't be deleted from here — end it first, so live mesh state never
+// disappears out from under LiveMonitoring/the mesh simulator.
+function deleteMission(missionId) {
+  const mission = db.prepare('SELECT status FROM mission WHERE id=?').get(missionId);
+  if (!mission) return;
+  if (mission.status === 'active') {
+    throw new Error('This mission is still active — end it before deleting.');
+  }
+  const tx = db.transaction((mId) => {
+    db.prepare('DELETE FROM vitals WHERE missionId=?').run(mId);
+    db.prepare('DELETE FROM alert WHERE missionId=?').run(mId);
+    db.prepare('DELETE FROM device_request WHERE missionId=?').run(mId);
+    db.prepare('DELETE FROM member_device WHERE missionId=?').run(mId);
+    db.prepare('DELETE FROM team_member WHERE missionId=?').run(mId);
+    db.prepare('DELETE FROM mission WHERE id=?').run(mId);
+  });
+  tx(missionId);
+}
 
 // ---------- Vitals (D3) ----------
 function recordVitals(missionId, memberId, { heartRate, spO2, bodyTemperature, confidence, x, y, floor }) {
@@ -281,6 +301,11 @@ function latestVitalsForMission(missionId) {
       SELECT memberId, MAX(timestamp) AS ts FROM vitals WHERE missionId=? GROUP BY memberId
     ) latest ON v.memberId = latest.memberId AND v.timestamp = latest.ts
   `).all(missionId);
+}
+// Full chronological history for a mission — used by the report generator,
+// as opposed to latestVitalsForMission() which is one row per member for the live view.
+function listVitals(missionId) {
+  return db.prepare('SELECT * FROM vitals WHERE missionId=? ORDER BY timestamp ASC').all(missionId);
 }
 
 // ---------- Alerts (D4a — automatic only) ----------
@@ -341,9 +366,9 @@ module.exports = {
   init,
   upsertLeader, getLeader, clearLeader,
   listRoster, addRosterMember, removeRosterMember,
-  listMissions, createMission, getMission, setMemberMeshStatus, startMission, endMission,
+  listMissions, createMission, getMission, setMemberMeshStatus, startMission, endMission, deleteMission,
   listMemberDevices, setDeviceStatus, setLocationNodeStatus,
-  recordVitals, latestVitalsForMission,
+  recordVitals, latestVitalsForMission, listVitals,
   createAlert, acknowledgeAlert, listAlerts,
   createDeviceRequest, respondToLocationRequest, acknowledgeDeviceRequest, listDeviceRequests,
   pendingVitals, pendingAlerts, pendingDeviceRequests, markSynced, markMissionSynced,

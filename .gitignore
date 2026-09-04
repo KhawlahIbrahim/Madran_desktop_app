@@ -1,9 +1,2 @@
 node_modules
-dist
-release
-electron/firebase-config.json
-*.db
-*.db-journal
-*.db-wal
-*.db-shm
 .DS_Store

@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld('madran', {
     alerts: (id) => ipcRenderer.invoke('mission:alerts', id),
     deviceRequests: (id) => ipcRenderer.invoke('mission:deviceRequests', id),
     syncNow: (id) => ipcRenderer.invoke('mission:syncNow', id),
+    downloadReport: (id) => ipcRenderer.invoke('mission:downloadReport', id),
+    delete: (id) => ipcRenderer.invoke('mission:delete', id),
   },
   alertActions: {
     acknowledge: (id) => ipcRenderer.invoke('alert:acknowledge', id),

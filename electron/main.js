@@ -1,9 +1,11 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const net = require('net');
+const fs = require('fs/promises');
 const local = require('./db');
 const mesh = require('./mesh-simulator');
 const sync = require('./sync');
+const report = require('./report');
 
 const isDev = !app.isPackaged;
 let mainWindow;
@@ -208,4 +210,44 @@ ipcMain.handle('mission:syncNow', async (_e, missionId) => {
   const leader = local.getLeader();
   if (!leader) return { synced: false, reason: 'no-leader' };
   return sync.syncMission(local, missionId);
+});
+
+// Renders the mission's local data (roster, alerts, device requests, full
+// vitals history) to a PDF via a hidden BrowserWindow and lets the Chief pick
+// where to save it. Nothing here touches Firebase — it reads only local SQLite.
+ipcMain.handle('mission:downloadReport', async (_e, missionId) => {
+  const mission = local.getMission(missionId);
+  if (!mission) return { saved: false, reason: 'not-found' };
+
+  const html = report.buildMissionReportHtml(mission, {
+    vitals: local.listVitals(missionId),
+    alerts: local.listAlerts(missionId),
+    deviceRequests: local.listDeviceRequests(missionId),
+  });
+
+  const safeLocation = (mission.locationName || 'mission').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const defaultPath = `madran-report-${safeLocation || 'mission'}-${missionId.slice(0, 8)}.pdf`;
+
+  const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+    title: 'Save Mission Report',
+    defaultPath,
+    filters: [{ name: 'PDF Document', extensions: ['pdf'] }],
+  });
+  if (canceled || !filePath) return { saved: false, reason: 'canceled' };
+
+  const renderWin = new BrowserWindow({ show: false, webPreferences: { offscreen: true } });
+  try {
+    await renderWin.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    const pdfBuffer = await renderWin.webContents.printToPDF({ printBackground: true, pageSize: 'A4' });
+    await fs.writeFile(filePath, pdfBuffer);
+  } finally {
+    renderWin.destroy();
+  }
+  return { saved: true, path: filePath };
+});
+
+ipcMain.handle('mission:delete', (_e, missionId) => {
+  local.deleteMission(missionId);
+  if (activeMissionId === missionId) activeMissionId = null;
+  return { deleted: true };
 });
